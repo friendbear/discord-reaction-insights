@@ -4,7 +4,7 @@ use serenity::{
     prelude::*,
 };
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use dotenv::dotenv;
 use std::{collections::HashMap, env};
 
@@ -37,6 +37,29 @@ impl EventHandler for Handler {
                 }
                 return;
             }
+
+            let naive_start_date = NaiveDateTime::parse_from_str(
+                &format!("{} 00:00:00", args[1]),
+                "%Y-%m-%d %H:%M:%S",
+            );
+            let naive_end_date = NaiveDateTime::parse_from_str(
+                &format!("{} 00:00:00", args[2]),
+                "%Y-%m-%d %H:%M:%S",
+            );
+
+
+            let start_date = match naive_start_date {
+                Ok(dt) => TimeZone::from_utc_datetime(&Utc, &dt),
+                Err(why) => {
+                    if let Err(why) = msg.channel_id.say(&ctx.http, "日付のフォーマットが正しくありません。{why}").await {
+                        println!("Error sending message: {:?}", why);
+                    }
+                    return;
+                }
+            };
+
+            // Use the start_date variable
+            println!("Start date: {:?}", start_date);
         }
     }
 }
