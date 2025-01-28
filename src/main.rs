@@ -1,75 +1,114 @@
-use serenity::{
-    async_trait,
-    model::{channel::{Message, ReactionType}, gateway::Ready, id::ChannelId},
-    prelude::*,
-};
+use chrono::{Datelike, Duration, Utc, TimeZone, Timelike};
+use serenity::all::Event;
+use serenity::model::channel::Message;
+use serenity::{async_trait, model::gateway::Ready, prelude::*};
+use serenity::Result;
+use tokio_cron_scheduler::{Job, JobScheduler};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use dotenv::dotenv;
-use std::{collections::HashMap, env};
+struct Handler;
 
-struct Handler {
-    target_channel: ChannelId,
-}
+impl EventHandler for Handler {}
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, msg: Message) {
-        if msg.author.bot {
-            return; // ボットのメッセージは無視
-        }
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let token = std::env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
+    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT | GatewayIntents::GUILDS;
+    let mut client = Client::builder(token, intents)
+        .event_handler(Handler)
+        .intents(intents)
+        .await
+        .expect("Err creating client");
 
-        if msg.content.starts_with("!top5") {
-            let args: Vec<&str> = msg.content.split_whitespace().collect();
+    let scheduler = JobScheduler::new().await.unwrap();
 
-            // 日付範囲の取得
-            if args.len() < 3 {
-                if let Err(why) = msg
-                    .channel_id
-                    .say(
-                        &ctx.http,
-                        "利用方法: !top5 <start_date> <end_date>\n例: !top5 2025-01-01 2025-02-02",
-                    )
-                    .await
-                {
-                    println!("Error sending message: {:?}", why);
-                }
-                return;
-            }
+    scheduler
+        .add(
+            Job::new_async("0 8 1 * * *", |_uuid, _lock| {
+                Box::pin(async move {
+                    println!("Running scheduled job");
 
-            let naive_start_date = NaiveDateTime::parse_from_str(
-                &format!("{} 00:00:00", args[1]),
-                "%Y-%m-%d %H:%M:%S",
-            );
-            let naive_end_date = NaiveDateTime::parse_from_str(
-                &format!("{} 00:00:00", args[2]),
-                "%Y-%m-%d %H:%M:%S",
-            );
+                    // 前月の開始と終了日時を計算
+                    let now = Utc::now();
+                    let start_of_last_month = Utc
+                        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+                        .unwrap()
+                        .checked_sub_months(chrono::Months::new(1))
+                        .unwrap()
+                        .with_day(1)
+                        .expect("ひとつ前の月の開始日時を計算する際にエラーが発生しました。");
 
+                    let end_of_last_month = start_of_last_month
+                        .checked_add_months(chrono::Months::new(1))
+                        .unwrap()
+                        .checked_sub_signed(Duration::days(1))
+                        .expect("ひとつ前の月の終了日時を計算する際にエラーが発生しました。")
+                        .with_hour(23)
+                        .and_then(|dt| dt.with_minute(59))
+                        .and_then(|dt| dt.with_second(59))
+                        .expect("時刻を設定する際にエラーが発生しました。");
 
-            let start_date = match naive_start_date {
-                Ok(dt) => TimeZone::from_utc_datetime(&Utc, &dt),
-                Err(why) => {
-                    if let Err(why) = msg.channel_id.say(&ctx.http, "日付のフォーマットが正しくありません。{why}").await {
-                        println!("Error sending message: {:?}", why);
-                    }
-                    return;
-                }
-            };
+                    println!("先月の開始日時: {}", start_of_last_month);
+                    println!("先月の終了日時: {}", end_of_last_month);
+                })
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
 
-            // Use the start_date variable
-            println!("Start date: {:?}", start_date);
-        }
+    scheduler
+        .start()
+        .await
+        .expect("Error starting scheduler");
+
+    if let Err(why) = client.start().await {
+        println!("Client error: {:?}", why);
     }
+
+    Ok(())
 }
 
-fn main() {
-    dotenv().ok();
+#[test]
+fn test_start_of_last_month() {
 
-    let token = env::var
-        ("
-        DISCORD_TOKEN
-        ")  
-        .expect("Expected a token in the environment");
+    let now = Utc::now();
+    let start_of_last_month = Utc
+        .with_ymd_and_hms(now.year(), now.month() , 1, 0, 0, 0)
+        .unwrap()
+        .checked_sub_months(chrono::Months::new(1))
+        .unwrap()
+        .with_day(1).expect("ひとつ前の月の開始日時を計算する際にエラーが発生しました。");
+
+    eprintln!("{start_of_last_month}");
+}
+
+#[test]
+fn test_end_of_last_month() {
+
+    let now = Utc::now();
+        // 先月の初日を計算
+    let start_of_last_month = Utc
+        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+        .unwrap()
+        .checked_sub_months(chrono::Months::new(1))
+        .unwrap()
+        .with_day(1)
+        .expect("ひとつ前の月の開始日時を計算する際にエラーが発生しました。");
+
+    let end_of_last_month = start_of_last_month
+        .checked_add_months(chrono::Months::new(1))
+        .unwrap()
+        .checked_sub_signed(Duration::days(1))
+        .expect("ひとつ前の月の終了日時を計算する際にエラーが発生しました。")
+        .with_hour(23)
+        .and_then(|dt| dt.with_minute(59))
+        .and_then(|dt| dt.with_second(59))
+        .expect("時刻を設定する際にエラーが発生しました。");    // 次の月の初日を計算してから1日引く
+
+    eprintln!("先月の初日: {}", start_of_last_month);
+    eprintln!("先月の最終日: {}", end_of_last_month);
+
 }
